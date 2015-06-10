@@ -1,0 +1,13 @@
+e31a16a5468042c30732c155024f427b *DESCRIPTION
+07a8415e1eef10a79abe4a8ddfcb315b *NAMESPACE
+05f60a13cba6d2fc136f74d947dd85cb *R/S3Methods.R
+ae3a298b28af7b28a54d856df3c7d8cd *R/effects.R
+1b57e9198837a758fecb998aae171a7f *R/mlVAR.R
+864299ad0915a74cd2781b5cb6a197f4 *R/simulateVAR.R
+e19220c9e6eb750f01e81afb209c3a24 *inst/COPYING
+6d6b3a134eff8817b6bf4015003cdc1b *inst/COPYRIGHTS
+83abdb903c3cf576244d4ca4c5f3e6b1 *man/fixedEffects.Rd
+a7e8a86e0de13de4832ea6c377d25af6 *man/mlVAR.Rd
+674af6e0c13bf0460d6acc924c43ef86 *man/plotMethod.Rd
+d3dbbd5b0b523a3cc108f3ea9c9a3cf3 *man/printsummary.Rd
+813a1b1de89cf59a9189f8fe012a864c *man/simulateVAR.Rd
