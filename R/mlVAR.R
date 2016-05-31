@@ -1,196 +1,288 @@
+aveMean <- function(x){
+  mean(x,na.rm=TRUE)
+}
+
+aveCenter <- function(x){
+  x - mean(x,na.rm=TRUE)
+}
+
+aveLag <- function(x, lag=1){
+  # Then lag:
+  if (lag > length(x)){
+    return(rep(NA,length(x)))
+  } else {
+    return(c(rep(NA,lag),head(x,length(x)-lag))) 
+  }
+}
+
+
 mlVAR <- function(
   data, # Data frame
+  
+  # Variable names:
   vars, # Vector of variables to include in analysis
   idvar, # String indicating the subject id variable name 
-  dayvar, # string indicating the measurement id variable name (if missing, every measurement is set to one day)
+  lags = 1, # Vector indicating the lags to include. Defaults to 1
+  dayvar, # string indicating the measurement id variable name (if missing, every measurement is set to one day). Used to not model scores over night
   beepvar, # String indicating beep per day (is missing, is added)
-  periodvar, # string indicating the period of measurement.
-  lags = 1, # Vector indicating the lags to include
-  treatmentvar, # character vector indicating treatment
-  covariates, # character indicating covariates independent of measurement.
-  control = list(optimizer = "bobyqa") # "bobyqa"  or "Nelder_Mead"
+  # timevar, # Only used for maxtimeDifference
+  
+  # Estimation options:
+  # orthogonal, # TRUE or FALSE for orthogonal edges. Defaults to nvar < 6
+  estimator = c("lmer"), # Add more? estimator = "least-squares" IGNORES multi-level
+  # contemporaneous = c("default","shared","unique"), # Shared or unique contamporaneous relationships?
+  temporal = c("default", "correlated","orthogonal","fixed"), # Unique = multi-level!
+  # betweenSubjects = c("default","GGM","posthoc"), # Should covariances between means be estimated posthoc or as a GGM? Only used when method = "univariate"
+  
+  # Misc:
+  # maxTimeDiff, # If not missing. maximum time difference.
+  # LMERcontrol = list(optimizer = "bobyqa"), # "bobyqa"  or "Nelder_Mead"
+  # JAGSoptions = list(),
+  verbose = TRUE, # Include progress bar?
+  compareToLags,
+  orthogonal # Used for backward competability
+  # JAGSexport = FALSE, # Exports jags files
+  # n.chain = 3,
+  # n.iter = 10000,
+  # estOmega = FALSE
 )
 {
+  if (0 %in% lags & length(lags) > 1){
+    stop("0 in 'lags' ignored; contemporaneous relationships are estimated by default.")
+    lags <- lags[lags!=0]
+  }
+  # First check the estimation options:
+  # method <- match.arg(method)
+  estimator <- match.arg(estimator)
+  # contemporaneous <- match.arg(contemporaneous)
+  # betweenSubjects <- match.arg(betweenSubjects)
+  # temporal <- match.arg(temporal)
+  betweenSubjects <- "GGM"
+  
+  # Nuclear option on JAGS:
+  if (estimator == "JAGS"){
+    stop("'JAGS' estimator is not implemented yet and expected in a later version of mlVAR.")
+  }
+  
+#   # Only estimate omega when estimator is JAGS
+#   if (estOmega & estimator != "JAGS"){
+#     stop("Cannot estimate Omega when estimator is not JAGS.")
+#   }
+  
+  # Some dummies for later versions:
+  # temporal <- "unique"
+  temporal <- match.arg(temporal)
+  contemporaneous <- "shared"
+  
+  if (!missing(orthogonal)){
+    temporal <- ifelse(orthogonal,"orthogonal","correlated")
+    warning(paste0("'orthogonal' argument is deprecated Setting temporal = '",temporal,"'"))
+  }
+#   
+#   if (contemporaneous == "default"){
+#     contemporaneous <- ifelse(estimator == "least-squares", "unique", "shared")
+#   }
+#   if (betweenSubjects != "default"){
+#     if (estimator != "lmer"){
+#       warning("'betweenSubjects' argument not used in estimator.")
+#     }
+#   } else {
+#     betweenSubjects <- ifelse(estimator == "least-squares","posthoc","GGM")
+#   }
+
+  
+  # Unimplemented methods:
+#   if (method == "multivariate" & estimator == "lmer"){
+#     stop("Multivariate estimation using 'lmer' is not implemented.")
+#   }
+#   if (contemporaneous == "unique" & estimator %in% c("lmer")){
+#     stop(paste0("Unique contemporaenous effects estimation not implemented for estimator = '",estimator,"'"))
+#   }
+  
+  # Obtain variables from mlVARsim0:
+  if (is(data,"mlVARsim0")){
+    vars <- data$vars
+    idvar <- data$idvar
+    data <- data$Data
+  }
+  
+  if (is(data,"mlVARsim")){
+    vars <- data$vars
+    idvar <- data$idvar
+    lags <- data$lag
+    data <- data$Data
+  }
+  
+  if (missing(lags)){
+    lags <- 1
+  }
+  
+  # Set temporal to fixed if lag-0:
+  if (all(lags==0)){
+    temporal <- "fixed"
+  }
+  
+  # Set orthogonal:
+  if (temporal == "default"){
+    if (length(vars) > 6){
+      
+      if (verbose) message("More than 6 nodes, correlations between random effects are set to zero (temporal = 'orthogonal')")
+      temporal <- "orthogonal"
+      
+    } else {
+      temporal <- "correlated"
+    }    
+  }
+  
+  # CompareToLags:
+  if (missing(compareToLags)){
+    compareToLags <- lags
+  }
+  if (length(compareToLags) < length(lags)){
+    stop("'compareToLags' must be at least as long as 'lags'")
+  }
+ 
   # Check input:
   stopifnot(!missing(vars))
   stopifnot(!missing(idvar))
   
-  # inout list (to include in output):
-  input <- list(vars = vars, lags = lags)
+
+  # input list (to include in output):
+  # input <- list(vars = vars, lags = lags, estimator=estimator,temporal = temporal)
   
   # Add day id if missing:
   if (missing(idvar))
   {
     idvar <- "ID"
     data[[idvar]] <- 1
-  } else input$idvar <- idvar
+  } # else input$idvar <- idvar
   
   # Add day var if missing:
   if (missing(dayvar))
   {
     dayvar <- "DAY"
     data[[dayvar]] <- 1
-  } else input$dayvar <- dayvar
+  } # else input$dayvar <- dayvar
   
   # Add beep var if missing:
   if (missing(beepvar))
   {
     beepvar <- "BEEP"
     data[[beepvar]] <- ave(data[[idvar]],data[[idvar]],data[[dayvar]],FUN = seq_along)
-  } else input$beepvar <- beepvar
+  } # else input$beepvar <- beepvar
   
-  # Add period var if missing:
-  if (missing(periodvar))
-  {
-    periodvar <- "PERIOD"
-    data[[periodvar]] <- 1
-  } else input$periodvar <- periodvar
+  # Remove NA day or beeps:
+  data <- data[!is.na(data[[idvar]]) & !is.na(data[[dayvar]]) & !is.na(data[[beepvar]]), ]
   
-  if (!missing(treatmentvar)) input$treatmentvar <- treatmentvar
-  if (!missing(covariates)) input$covariates <- covariates
+  ### Codes from mlVAR
+  # Create mlVAR-like predictor data-frame:
+  # Within-subjects model:
+  PredModel <- expand.grid(
+    dep = vars,
+    pred = vars,
+    lag = compareToLags[compareToLags!=0],
+    type =  "within",
+    stringsAsFactors = FALSE
+  )
   
-  # Remove NA period, day or beeps:
-  data <- data[!is.na(data[[idvar]]) & !is.na(data[[periodvar]])  &  !is.na(data[[dayvar]]) & !is.na(data[[beepvar]]), ]
-  
-  # Create augmented lagged data:
-  augData <- plyr::ddply(data, c(idvar,dayvar,periodvar), function(x){
-    # Check for duplicate beeps:
-    if (any(duplicated(x[[beepvar]])))
-    {
-      stop("Duplicated beepnumbers found. ")
-    }
-    # Order by beep:
-    x <- x[order(x[[beepvar]]),]
+   # Between-subjects model:
+  if (betweenSubjects == "GGM" & estimator != "JAGS"){
+    between <- expand.grid(dep=vars,pred=vars,lag=NA,type="between",
+                          stringsAsFactors = FALSE)
     
+    between <- between[between$dep != between$pred,]
     
-    # Augment missing:
-    beepseq <- seq(1, max(x[[beepvar]]))
-    if (!identical(x[[beepvar]], beepseq))
-    {
-      dummy <- data.frame(ID = unique(x[[idvar]]), PERIOD= unique(x[[periodvar]]), DAY = unique(x[[dayvar]]), BEEP = beepseq)
-      names(dummy) <- c(idvar,periodvar,dayvar,beepvar)
-      x <- join(dummy,x, by = names(dummy)) 
-    }
-    
-    # Lag variables:
-    for (l in lags)
-    {
-      if (l > nrow(x)) stop("Lag is higher than amount of measurements")
-      
-      lagDF <- x[-(nrow(x)-(1:l)+1),vars]
-      lagDF <- lagDF[c(rep(NA,l),seq_len(nrow(lagDF))),]
-      names(lagDF) <- paste0("L",l,"_",names(lagDF))
-      x <- cbind(x,lagDF)
-    }
-    
-    return(x)
-  })
-  
-  
-  ### MULTILEVEL ANALYSIS ###
-  # Predictor string:
-  Pred <- character(0)
-  
-  # Fixed effects for each lag:
-  lagVars <- paste(sapply(lags, function(l) paste0("L",l,"_",vars, collapse = " + ")),collapse = " + ")
-  Pred <- c(Pred, paste("(",lagVars,")"))
-  
-  # If period has more than 1 level:
-  if (length(unique(augData[[periodvar]])) > 1)
-  {
-    # Fixed effect for period:
-    Pred <- c(Pred, periodvar)
-    
-    # Interaction lagged vars & period:
-    Pred <- c(Pred, paste("(",lagVars,") : ", periodvar))
-    
-    # If not missing, interaction with treatment:
-    if (!missing(treatmentvar))
-    {
-      # Inteaction period : treatment:
-      Pred <- c(Pred, paste(periodvar," : ", treatmentvar))
-      
-      # 3 way interaction:
-      Pred <- c(Pred, paste(periodvar,  ": (",lagVars,") : ", treatmentvar))
-    }
-    
-    # Random effects:
-    ### -1????
-    Pred <- c(Pred, paste0("( factor(",periodvar,") - 1 + ",lagVars," |",idvar,")"))
-  } else {
-    # Random effects:
-    ### -1????
-    Pred <- c(Pred, paste0("(",lagVars," |",idvar,")"))
+    PredModel <- rbind(PredModel,between )
   }
   
+  # Unique predictors:
+  UniquePredModel <- PredModel[!duplicated(PredModel[,c("pred","lag","type")]),c("pred","lag","type")]
   
-  # Covariate:
-  if (!missing(covariates))
-  {
-    Pred <- c(Pred, paste0(covariates,"*(",lagVars,")"))
+  # Ad ID:
+  UniquePredModel$predID <- paste0("Predictor__",seq_len(nrow(UniquePredModel)))
+  
+  # Left join to total:
+  PredModel <- PredModel %>% left_join(UniquePredModel, by = c("pred","lag","type"))
+  
+  # Augment the data
+  augData <- data
+  
+  # Add missing rows for missing beeps
+  beepsPerDay <-  eval(substitute(dplyr::summarize_(data %>% group_by_(idvar,dayvar), 
+                                             first = ~ min(beepvar,na.rm=TRUE),
+                                             last = ~ max(beepvar,na.rm=TRUE)), 
+                                  list(beepvar = as.name(beepvar))))
+  
+  # all beeps:
+  allBeeps <- expand.grid(unique(data[[idvar]]),unique(data[[dayvar]]),seq(min(data[[beepvar]],na.rm=TRUE),max(data[[beepvar]],na.rm=TRUE))) 
+  names(allBeeps) <- c(idvar,dayvar,beepvar)
+  
+  # Left join the beeps per day:
+  allBeeps <- eval(substitute({
+    allBeeps %>% left_join(beepsPerDay, by = c(idvar,dayvar)) %>% 
+      group_by_(idvar,dayvar) %>% filter_(~BEEP >= first, ~BEEP <= last)%>%
+      arrange_(idvar,dayvar,beepvar)
+  },  list(BEEP = as.name(beepvar))))
+  
+  
+  # Enter NA's:
+  augData <- augData %>% right_join(allBeeps, by = c(idvar,dayvar,beepvar))
+  
+  # Add the predictors (when estimatior != JAGS):
+  if (estimator != "JAGS"){
+    for (i in seq_len(nrow(UniquePredModel))){
+      # between: add mean variable:
+      
+      if (UniquePredModel$type[i] == "between"){
+        augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$pred[i]]],augData[[idvar]], FUN = aveMean)
+      } else {
+        # First include:
+        augData[[UniquePredModel$predID[i]]] <-  ave(augData[[UniquePredModel$pred[i]]],augData[[idvar]],augData[[dayvar]], FUN = function(x)aveLag(x,UniquePredModel$lag[i]))
+        
+        # Then center:
+        ### CENTERING ONLY NEEDED WHEN ESTIMATOR != JAGS ###
+        if (!estimator %in% c("stan","JAGS")){
+          augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], FUN = aveCenter) 
+        } 
+      }
+      
+    }
   }
-  
-  
-  
-  # Combine:
-  Pred <- paste(Pred, collapse = " + ")
-  
-  Results <- list() # List to store results in
-  
-  # Run models:
-  pb <- txtProgressBar(min=0,max=length(vars),style=3)
-  for (j in seq_along(vars)){
 
-    ff <- as.formula(paste(vars[j],"~",Pred))
-    Results[[j]] <- lme4::lmer(ff,data=augData, control = do.call('lmerControl',control),REML=FALSE)
-    setTxtProgressBar(pb, j)
-  }
-  close(pb)
+  # Remove missings from augData:
+  Vars <- unique(c(PredModel$dep,PredModel$predID,idvar,beepvar,dayvar))
+  augData <- na.omit(augData[,Vars])
+  PredModel <- PredModel[is.na(PredModel$lag) | (PredModel$lag %in% lags),]
   
-  # Extract info:
-  logLik <- sum(unlist(lapply(Results,logLik)))
-  df <- sum(unlist(lapply(lapply(Results,logLik),attr,'df')))
-  BIC <- sum(unlist(lapply(Results,BIC)))
-  Coef <- do.call(rbind,lapply(Results,fixef))
-  se.Coef <- do.call(rbind,lapply(Results,se.fixef))
-  colnames(Coef) <- names(lme4::fixef(Results[[1]]))
-  colnames(se.Coef) <- names(lme4::fixef(Results[[1]]))
-  rownames(Coef) <- vars
-  rownames(se.Coef) <- vars
   
-  # Random effects:
-  ranEffects <- lapply(Results, lme4::ranef)
-  ranPerID <- list()
-  for (i in seq_len(nrow(ranEffects[[1]][[idvar]]))){
-    ranPerID[[i]] <- do.call(rbind, lapply(ranEffects,function(x)x[[idvar]][i,]))  
-    rownames(ranPerID[[i]]) <- vars
-  }
-  names(ranPerID) <- rownames( ranEffects[[1]][[idvar]] )
+  #### RUN THE MODEL ###
+  if (estimator == "lmer"){
+    Res <- lmer_mlVAR(PredModel,augData,idvar,verbose=verbose, betweenSubjects=betweenSubjects,temporal=temporal)
+  # } else if (estimator == "least-squares"){
+    # Res <- leastSquares_mlVAR(PredModel,augData,idvar,orthogonal = orthogonal, verbose=verbose, betweenSubjects=betweenSubjects)
+#   } else if (estimator == "JAGS"){
+#     Res <- JAGS_mlVAR(augData, vars, 
+#                       idvar,
+#                       lags, 
+#                       dayvar, 
+#                       beepvar,
+#                       temporal = temporal,
+#                       orthogonal = orthogonal, verbose=verbose, contemporaneous=contemporaneous,
+#                       JAGSexport=JAGSexport,
+#                       n.chain = n.chain, n.iter=n.iter,estOmega=estOmega)
+  } else  stop(paste0("Estimator '",estimator,"' not yet implemented."))
   
-  # Variance of random effects:
-  Variance <- do.call(rbind,lapply(Results,function(x)diag(lme4::VarCorr(x)[[idvar]])))
-  rownames(Variance) <- vars
   
-  # Output:
-  out <- list(
-    fixedEffects = Coef,
-    se.fixedEffects = se.Coef,
-    randomEffects =  ranPerID,
-    randomEffectsVariance = Variance,
-    pvals = 2*(1-pnorm(abs(Coef/se.Coef))),
-    pseudologlik = logLik,
-    df = df,
-    BIC = BIC,
-    input = input)
-  #     results = Results)
+  # Add input:
+  Res[['input']] <- list(
+    vars = vars, 
+    lags = lags,
+    compareToLags=compareToLags,
+    estimator = estimator,
+    temporal = temporal
+  )
   
-  class(out) <- "mlVAR"
+  return(Res)
   
-  return(out)  
 }
-# 
-# fixef.mlvar <- function(object) object$fixedEffects
-# se.fixef.mlvar <- function(object) object$se.fixedEffects
-# 
-# summary.mlvar <- function(x) x[c('coef','se.coef','pvals')]
-# coef.mlvar <- function(x) x$coef
+
