@@ -1,5 +1,4 @@
 # importFrom(rstan, "stan")
-
 importFrom(clusterGeneration,"genPositiveDefMat")
 export(mlVARsim)
 export(mlVARsim0)
@@ -41,7 +40,7 @@ S3method(plot, mlVAR0)
 S3method(print, mlVAR0)
 S3method(summary, mlVAR0)
 
-importFrom("stats", "coef", "lm", "resid", "sigma")
+importFrom("stats", "coef", "lm", "resid")
 
   importFrom("graphics", "plot")
   importFrom("methods", "is")
@@ -49,3 +48,9 @@ importFrom("stats", "coef", "lm", "resid", "sigma")
              "cov2cor", "na.omit", "pnorm", "quantile", "rWishart",
              "residuals", "rnorm", "runif", "sd")
   importFrom("utils", "head", "setTxtProgressBar", "txtProgressBar")
+  
+  
+import(parallel)
+
+
+importFrom("stats", "sigma")

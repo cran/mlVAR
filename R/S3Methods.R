@@ -82,17 +82,20 @@ summary.mlVAR <- function(
     pcor <- object$results$Theta$pcor$mean
     pcorSD <- object$results$Theta$pcor$SD
     UT <- upper.tri(cor)
-    
-    
+    P <- object$results$Gamma_Theta$P
+
     cat("\n\nContemporaneous effects (posthoc estimated):\n")
     ContDF <- data.frame(
       node1 = vars[col(cor)][UT],
       node2 = vars[row(cor)][UT],
+      "P 1->2" = round(P[UT],round),
+      "P 2->1" = round(t(P)[UT],round),
       pcor = round(pcor[UT],round),
       ran_SD_pcor = round(pcorSD[UT],round),
       cor = round(cor[UT],round),
       ran_SD_cor = round(corSD[UT],round)
     )
+    names(ContDF) <- c("v1","v2","P 1->2","P 1<-2","pcor","ran_SD_pcor","cor","ran_SD_cor")
     
     print(ContDF,row.names=FALSE)
     
@@ -148,7 +151,7 @@ plot.mlVARsim <- function(x,...){
   x$results <- x$model
   x$input <- list(vars = x$vars)
   class(x) <- "mlVAR"
-  plot.mlVAR(x,...)
+  plot.mlVAR(x,...,nonsig="show")
 }
 
 plot.mlVAR <- 
@@ -159,11 +162,12 @@ plot.mlVAR <-
            SD = FALSE, # Plots SD instead of normal parameters
            subject, # If assigned, show the network of a particulair subject instead
            order, # If assigned, re-order nodes
-           nonsig = c("show","dashed","hide"), # How to handle nonsignificant edges? In Bayesian estimation, checks if 0 is inside interval.
-           rule = c("or","and"), # GGM sig rule
+           nonsig = c("default","show","hide","dashed"), # How to handle nonsignificant edges? In Bayesian estimation, checks if 0 is inside interval.
+           rule = c("or", "and"), # GGM sig rule
            alpha = 0.05, # alpha value for significance test
            onlySig = FALSE, # Backward competability argument.
            layout = "spring",
+           verbose = TRUE,
            ...  #Arguments sent to qgraph
   ){
     rule <- match.arg(rule)
@@ -192,6 +196,19 @@ plot.mlVAR <-
     # Now check for arguments:
     type <- match.arg(type)
     nonsig <- match.arg(nonsig)
+    if (nonsig == "default"){
+      nonsig <- "hide"
+      if (!partial){
+        nonsig <- "show"
+      }
+      if (!missing(subject)){
+        nonsig <- "show"
+      }
+      if (verbose){
+        message(paste0("'nonsig' argument set to: '",nonsig,"'"))
+      }
+    }
+    
     if (missing(order)){
       order <- x$input$vars
     }
@@ -211,40 +228,47 @@ plot.mlVAR <-
     
     # Temporal:
     if (type == "temporal"){
-      if (missing(subject)){
-        # Obtain fixed effects network:
-        if (SD){
-          NET <- t(x$results$Beta$SD[,,lag])
-        } else {
-          NET <- t(x$results$Beta$mean[,,lag])  
-        }
-        
-        
-        # Attempt to obtain significance:
-        # Via P:
-        if (!SD && any(is.na(x$results$Beta$P))){
-          
-          # Via CI:
-          if (!any(is.na(x$results$Beta$lower)) && !any(is.na(x$results$Beta$upper))){
-            SIG <- t(x$results$Beta$lower[,,lag]) > 0 |  t(x$results$Beta$upper[,,lag]) < 0
-          } else {
-            # No P or CI:
-            SIG <- matrix(TRUE, nrow(NET), ncol(NET))
-            if (nonsig != "show"){
-              warning("No p-values or CI computed. Can not hide non-significant edges.")
-            }
-          }
-        } else {
-          SIG <-  t(x$results$Beta$P[,,lag]) < alpha
-        }
-        
+      
+      if (SD){
+        SIG <- matrix(TRUE,length(ord),length(ord))
+        NET <- t(x$results$Beta$SD[,,lag])
       } else {
-        # Obtain subject network:
-        NET <- t(x$results$Beta$subject[[subject]][,,lag])
-        SIG <- matrix(TRUE, nrow(NET), ncol(NET))
-        if (nonsig != "show"){
-          warning("Can not hide non-significant edges for subject network.")
-        }
+        
+        if (missing(subject)){
+          # Obtain fixed effects network:
+#           if (SD){
+#             
+#           } else {
+            NET <- t(x$results$Beta$mean[,,lag])  
+          # }
+          
+          # Attempt to obtain significance:
+          # Via P:
+          
+          if (any(is.na(x$results$Beta$P))){
+            
+            # Via CI:
+            if (!any(is.na(x$results$Beta$lower)) && !any(is.na(x$results$Beta$upper))){
+              SIG <- t(x$results$Beta$lower[,,lag]) > 0 |  t(x$results$Beta$upper[,,lag]) < 0
+            } else {
+              # No P or CI:
+              SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+              if (nonsig != "show"){
+                warning("No p-values or CI computed. Can not hide non-significant edges.")
+              }
+            }
+          } else {
+            SIG <-  t(x$results$Beta$P[,,lag]) < alpha
+          }
+          
+        } else {
+          # Obtain subject network:
+          NET <- t(x$results$Beta$subject[[subject]][,,lag])
+          SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+          if (nonsig != "show"){
+            warning("Can not hide non-significant edges for subject network.")
+          }
+        } 
       }
     }
     
@@ -263,7 +287,7 @@ plot.mlVAR <-
         
         # Attempt to obtain significance:
         # Via P:
-
+        
         # If nonsig is not show:
         if (nonsig != "show"){
           
@@ -300,21 +324,21 @@ plot.mlVAR <-
           SIG <- matrix(TRUE, nrow(NET), ncol(NET))
         }
         
-#         if (!SD && any(is.na(x$results$Theta[[sub]]$P))){
-#           
-#           # Via CI:
-#           if (!any(is.na(x$results$Theta[[sub]]$lower)) && !any(is.na(x$results$Theta[[sub]]$upper))){
-#             SIG <- x$results$Theta[[sub]]$lower > 0 |  x$results$Theta[[sub]]$upper < 0
-#           } else {
-#             # No P or CI:
-#             SIG <- matrix(TRUE, nrow(NET), ncol(NET))
-#             if (nonsig != "show"){
-#               warning("No p-values or CI computed. Can not hide non-significant edges.")
-#             }
-#           }
-#         } else {
-#           SIG <-  x$results$Theta[[sub]]$P < alpha
-#         }
+        #         if (!SD && any(is.na(x$results$Theta[[sub]]$P))){
+        #           
+        #           # Via CI:
+        #           if (!any(is.na(x$results$Theta[[sub]]$lower)) && !any(is.na(x$results$Theta[[sub]]$upper))){
+        #             SIG <- x$results$Theta[[sub]]$lower > 0 |  x$results$Theta[[sub]]$upper < 0
+        #           } else {
+        #             # No P or CI:
+        #             SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+        #             if (nonsig != "show"){
+        #               warning("No p-values or CI computed. Can not hide non-significant edges.")
+        #             }
+        #           }
+        #         } else {
+        #           SIG <-  x$results$Theta[[sub]]$P < alpha
+        #         }
         
       } else {
         # Obtain subject network:
@@ -342,24 +366,24 @@ plot.mlVAR <-
       # Obtain fixed effects network:
       NET <- x$results$Omega_mu[[sub]]$mean
       
-#       # Attempt to obtain significance:
-#       # Via P:
-#       if (any(is.na(x$results$Omega_mu[[sub]]$P))){
-#         
-#         # Via CI:
-#         if (!any(is.na(x$results$Omega_mu[[sub]]$lower)) && !any(is.na(x$results$Omega_mu[[sub]]$upper))){
-#           SIG <- x$results$Omega_mu[[sub]]$lower > 0 |  x$results$Omega_mu[[sub]]$upper < 0
-#         } else {
-#           # No P or CI:
-#           SIG <- matrix(TRUE, nrow(NET), ncol(NET))
-#           if (nonsig != "show"){
-#             warning("No p-values or CI computed. Can not hide non-significant edges.")
-#           }
-#         }
-#       } else {
-#         SIG <-  x$results$Omega_mu[[sub]]$P < alpha
-#       }
-#       
+      #       # Attempt to obtain significance:
+      #       # Via P:
+      #       if (any(is.na(x$results$Omega_mu[[sub]]$P))){
+      #         
+      #         # Via CI:
+      #         if (!any(is.na(x$results$Omega_mu[[sub]]$lower)) && !any(is.na(x$results$Omega_mu[[sub]]$upper))){
+      #           SIG <- x$results$Omega_mu[[sub]]$lower > 0 |  x$results$Omega_mu[[sub]]$upper < 0
+      #         } else {
+      #           # No P or CI:
+      #           SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+      #           if (nonsig != "show"){
+      #             warning("No p-values or CI computed. Can not hide non-significant edges.")
+      #           }
+      #         }
+      #       } else {
+      #         SIG <-  x$results$Omega_mu[[sub]]$P < alpha
+      #       }
+      #       
       
       # If nonsig is not show:
       if (nonsig != "show"){

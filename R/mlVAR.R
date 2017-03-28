@@ -2,8 +2,19 @@ aveMean <- function(x){
   mean(x,na.rm=TRUE)
 }
 
-aveCenter <- function(x){
-  x - mean(x,na.rm=TRUE)
+aveCenter <- function(x, scale = FALSE){
+  x <- x - mean(x,na.rm=TRUE)
+  if (scale){
+    x <- x / sd(x,na.rm=TRUE)
+  }
+  x
+}
+
+aveScaleNoCenter <- function(x){
+  meanGroup <- mean(x,na.rm=TRUE)
+  x <- x - meanGroup
+  x <- x / sd(x,na.rm=TRUE)
+  x + meanGroup
 }
 
 aveLag <- function(x, lag=1){
@@ -46,7 +57,7 @@ mlVAR <- function(
   contemporaneous = c("default","correlated","orthogonal","fixed","unique"), # IF NOT FIXED: 2-step estimation method (lmer again on residuals)
   temporal = c("default", "correlated","orthogonal","fixed","unique"), # Unique = multi-level!
   # betweenSubjects = c("default","GGM","posthoc"), # Should covariances between means be estimated posthoc or as a GGM? Only used when method = "univariate"
-  
+  nCores = 1, # Number of computer cores
   # Misc:
   # maxTimeDiff, # If not missing. maximum time difference.
   # LMERcontrol = list(optimizer = "bobyqa"), # "bobyqa"  or "Nelder_Mead"
@@ -54,6 +65,7 @@ mlVAR <- function(
   verbose = TRUE, # Include progress bar?
   compareToLags,
   scale = TRUE, # standardize variables grand mean before estimation
+  scaleWithin = FALSE, # Scale variables within-person
   
   orthogonal # Used for backward competability
   
@@ -82,10 +94,10 @@ mlVAR <- function(
     stop("'JAGS' estimator is not implemented yet and expected in a later version of mlVAR.")
   }
   
-#   # Only estimate omega when estimator is JAGS
-#   if (estOmega & estimator != "JAGS"){
-#     stop("Cannot estimate Omega when estimator is not JAGS.")
-#   }
+  #   # Only estimate omega when estimator is JAGS
+  #   if (estOmega & estimator != "JAGS"){
+  #     stop("Cannot estimate Omega when estimator is not JAGS.")
+  #   }
   
   # Some dummies for later versions:
   # temporal <- "unique"
@@ -96,24 +108,24 @@ mlVAR <- function(
     temporal <- ifelse(orthogonal,"orthogonal","correlated")
     warning(paste0("'orthogonal' argument is deprecated Setting temporal = '",temporal,"'"))
   }
-#   
-
-#   if (betweenSubjects != "default"){
-#     if (estimator != "lmer"){
-#       warning("'betweenSubjects' argument not used in estimator.")
-#     }
-#   } else {
-#     betweenSubjects <- ifelse(estimator == "least-squares","posthoc","GGM")
-#   }
-
+  #   
+  
+  #   if (betweenSubjects != "default"){
+  #     if (estimator != "lmer"){
+  #       warning("'betweenSubjects' argument not used in estimator.")
+  #     }
+  #   } else {
+  #     betweenSubjects <- ifelse(estimator == "least-squares","posthoc","GGM")
+  #   }
+  
   
   # Unimplemented methods:
-#   if (method == "multivariate" & estimator == "lmer"){
-#     stop("Multivariate estimation using 'lmer' is not implemented.")
-#   }
-#   if (contemporaneous == "unique" & estimator %in% c("lmer")){
-#     stop(paste0("Unique contemporaenous effects estimation not implemented for estimator = '",estimator,"'"))
-#   }
+  #   if (method == "multivariate" & estimator == "lmer"){
+  #     stop("Multivariate estimation using 'lmer' is not implemented.")
+  #   }
+  #   if (contemporaneous == "unique" & estimator %in% c("lmer")){
+  #     stop(paste0("Unique contemporaenous effects estimation not implemented for estimator = '",estimator,"'"))
+  #   }
   
   # Obtain variables from mlVARsim0:
   if (is(data,"mlVARsim0")){
@@ -148,6 +160,10 @@ mlVAR <- function(
     if (verbose) {
       message(paste0("'estimator' argument set to '",estimator,"'"))
     }
+  }
+  
+  if (nCores != 1 && estimator != "lmer"){
+    stop("'nCores > 1' only supported for 'lmer' estimator.")
   }
   
   if (temporal == "default"){
@@ -197,12 +213,14 @@ mlVAR <- function(
   if (length(compareToLags) < length(lags)){
     stop("'compareToLags' must be at least as long as 'lags'")
   }
- 
+  
   # Check input:
   stopifnot(!missing(vars))
   stopifnot(!missing(idvar))
+  if (!is.character(vars) ||  !all(vars %in% names(data))){
+    stop("'vars' must be a string vector indicating column names of the data.")
+  }
   
-
   # input list (to include in output):
   # input <- list(vars = vars, lags = lags, estimator=estimator,temporal = temporal)
   
@@ -211,6 +229,10 @@ mlVAR <- function(
   {
     idvar <- "ID"
     data[[idvar]] <- 1
+  } else {
+    if (!is.character(idvar) || length(idvar) != 1 || !idvar %in% names(data)){
+      stop("'idvar' must be a string indicating a column name of the data.")
+    }
   } # else input$idvar <- idvar
   
   # Add day var if missing:
@@ -218,14 +240,28 @@ mlVAR <- function(
   {
     dayvar <- "DAY"
     data[[dayvar]] <- 1
-  } # else input$dayvar <- dayvar
+  } else {
+    if (!is.character(dayvar) || length(dayvar) != 1 || !dayvar %in% names(data)){
+      stop("'dayvar' must be a string indicating a column name of the data.")
+    }
+  }# else input$dayvar <- dayvar
   
   # Add beep var if missing:
   if (missing(beepvar))
   {
     beepvar <- "BEEP"
-    data[[beepvar]] <- ave(data[[idvar]],data[[idvar]],data[[dayvar]],FUN = seq_along)
-  } # else input$beepvar <- beepvar
+    data[[beepvar]] <- ave(seq_len(nrow(data)),data[[idvar]],data[[dayvar]],FUN = seq_along)
+  } else {
+    if (!is.character(beepvar) || length(beepvar) != 1 || !beepvar %in% names(data)){
+      stop("'beepvar' must be a string indicating a column name of the data.")
+    }
+  }# else input$beepvar <- beepvar
+  
+  ### INPUT CHECK ###
+  if (!is.numeric(data[[beepvar]])){
+    stop("Beep variable is not numeric")
+  }
+  
   
   # Remove NA day or beeps:
   data <- data[!is.na(data[[idvar]]) & !is.na(data[[dayvar]]) & !is.na(data[[beepvar]]), ]
@@ -243,7 +279,7 @@ mlVAR <- function(
     
     warning(paste0("The following variables are linearly dependent on other columns, and therefore dropped from the mlVAR analysis:\n",
                    paste("\t-",discard,collapse="\n")))
-  
+    
     # If only one, we can find it out:
     if (rnk == length(vars) - 1){
       drop <- qrX$pivot[length(qrX$pivot)]
@@ -265,7 +301,7 @@ mlVAR <- function(
       data[[v]] <- Scale(data[[v]])
     }
   }
- 
+  
   
   ### Codes from murmur
   # Create murmur-like predictor data-frame:
@@ -278,10 +314,10 @@ mlVAR <- function(
     stringsAsFactors = FALSE
   )
   
-   # Between-subjects model:
+  # Between-subjects model:
   if (betweenSubjects == "GGM" & estimator == "lmer"){
     between <- expand.grid(dep=vars,pred=vars,lag=NA,type="between",
-                          stringsAsFactors = FALSE)
+                           stringsAsFactors = FALSE)
     
     between <- between[between$dep != between$pred,]
     
@@ -302,12 +338,12 @@ mlVAR <- function(
   
   # Add missing rows for missing beeps
   beepsPerDay <-  eval(substitute(dplyr::summarize_(data %>% group_by_(idvar,dayvar), 
-                                             first = ~ min(beepvar,na.rm=TRUE),
-                                             last = ~ max(beepvar,na.rm=TRUE)), 
+                                                    first = ~ min(beepvar,na.rm=TRUE),
+                                                    last = ~ max(beepvar,na.rm=TRUE)), 
                                   list(beepvar = as.name(beepvar))))
   
   # all beeps:
-  allBeeps <- expand.grid(unique(data[[idvar]]),unique(data[[dayvar]]),seq(min(data[[beepvar]],na.rm=TRUE),max(data[[beepvar]],na.rm=TRUE))) 
+  allBeeps <- expand.grid(unique(data[[idvar]]),unique(data[[dayvar]]),seq(min(data[[beepvar]],na.rm=TRUE),max(data[[beepvar]],na.rm=TRUE)),stringsAsFactors = FALSE) 
   names(allBeeps) <- c(idvar,dayvar,beepvar)
   
   # Left join the beeps per day:
@@ -337,13 +373,20 @@ mlVAR <- function(
         # Then center:
         ### CENTERING ONLY NEEDED WHEN ESTIMATOR != JAGS ###
         if (!estimator %in% c("JAGS")){
-          augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], FUN = aveCenter) 
+          augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], FUN = function(xx)aveCenter(xx,scale=scaleWithin))
         } 
       }
       
     }
   }
-
+  
+  # Also within-person standardize dependent vars if scaleWithin = TRUE
+  if (isTRUE(scaleWithin)){
+    for (i in seq_along(vars)){
+      augData[[vars[i]]] <- ave(augData[[vars[i]]],augData[[idvar]], FUN = function(xx)aveScaleNoCenter(xx))
+    }
+  }
+  
   # Remove missings from augData:
   Vars <- unique(c(PredModel$dep,PredModel$predID,idvar,beepvar,dayvar))
   augData <- na.omit(augData[,Vars])
@@ -352,22 +395,23 @@ mlVAR <- function(
   
   #### RUN THE MODEL ###
   if (estimator == "lmer"){
-    Res <- lmer_mlVAR(PredModel,augData,idvar,verbose=verbose, contemporaneous=contemporaneous,temporal=temporal)
-  # } else if (estimator == "stan"){
+    Res <- lmer_mlVAR(PredModel,augData,idvar,verbose=verbose, contemporaneous=contemporaneous,temporal=temporal,
+                      nCores=nCores)
+    # } else if (estimator == "stan"){
     # Res <- stan_mlVAR(PredModel,augData,idvar,verbose=verbose,temporal=temporal,nCores=nCores,...)    
-  
-    } else if (estimator == "lm"){
+    
+  } else if (estimator == "lm"){
     Res <- lm_mlVAR(PredModel,augData,idvar,temporal=temporal,contemporaneous=contemporaneous, verbose=verbose)
-#   } else if (estimator == "JAGS"){
-#     Res <- JAGS_mlVAR(augData, vars, 
-#                       idvar,
-#                       lags, 
-#                       dayvar, 
-#                       beepvar,
-#                       temporal = temporal,
-#                       orthogonal = orthogonal, verbose=verbose, contemporaneous=contemporaneous,
-#                       JAGSexport=JAGSexport,
-#                       n.chain = n.chain, n.iter=n.iter,estOmega=estOmega)
+    #   } else if (estimator == "JAGS"){
+    #     Res <- JAGS_mlVAR(augData, vars, 
+    #                       idvar,
+    #                       lags, 
+    #                       dayvar, 
+    #                       beepvar,
+    #                       temporal = temporal,
+    #                       orthogonal = orthogonal, verbose=verbose, contemporaneous=contemporaneous,
+    #                       JAGSexport=JAGSexport,
+    #                       n.chain = n.chain, n.iter=n.iter,estOmega=estOmega)
   } else  stop(paste0("Estimator '",estimator,"' not yet implemented."))
   
   
@@ -379,6 +423,8 @@ mlVAR <- function(
     estimator = estimator,
     temporal = temporal
   )
+  
+  Res$IDs <- rownames(ranef(Res$output[[1]])[[idvar]])
   
   return(Res)
   

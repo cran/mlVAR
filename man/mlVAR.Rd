@@ -8,11 +8,13 @@ Multilevel VAR Estimation for Multiple Time Series
 The function \code{mlVAR0} computes estimates of the multivariate vector autoregression model. This model returns three stuctures: temporal effects (e.g., lag-1 regression weights), contemporaneous relationships (correlations or partial correlations) and between-subject effects (correlations and partial correlations). See details.
 }
 \usage{
-mlVAR(data, vars, idvar, lags = 1, dayvar, beepvar, 
-    estimator =  c("default","lmer","lm"), 
-    contemporaneous = c("default","correlated","orthogonal","fixed","unique"),
-    temporal = c("default", "correlated", "orthogonal", "fixed", "unique"),
-    verbose = TRUE, compareToLags, scale = TRUE, orthogonal)
+mlVAR(data, vars, idvar, lags = 1, dayvar, beepvar,
+                 estimator = c("default", "lmer", "lm"),
+                 contemporaneous = c("default", "correlated",
+                 "orthogonal", "fixed", "unique"), temporal =
+                 c("default", "correlated", "orthogonal", "fixed",
+                 "unique"), nCores = 1, verbose = TRUE, compareToLags,
+                 scale = TRUE, scaleWithin = FALSE, orthogonal)
 }
 %- maybe also 'usage' for other objects documented here.
 \arguments{
@@ -44,10 +46,12 @@ The estimator to be used. Currently only \code{"lmer"} is supported.
   \item{temporal}{
 How should the temporal effects be estimated? \code{"correlated"} estimates correlated random effects, \code{"orthogonal"} estimates non-correlated random effects and \code{"fixed"} estimates a model in which only the intercept is random. Defaults to \code{"correlated"} when the number of variables is less than 6 and \code{"orthogonal"} otherwise. \code{"unique"} uses \code{lm} to estimate an unique model for each subject.
 }
+\item{nCores}{Number of cores to use in computation}
   \item{verbose}{
 Logical indicating if console messages and the progress bar should be shown.
 }
 \item{scale}{Logical, should variables be standardized before estimation?}
+\item{scaleWithin}{Logial, should variables be scaled within-person (set to \code{FALSE} to only center within-person)}
   \item{compareToLags}{
 A vector indicating which lags to base the data on. If the model is to be compared with a model with multiple lags using \code{\link{mlVARcompare}}, this argument must be used to make sure the number of observations is the same in both models (e.g., a lag 1 model can model the second observation of a day and a lag-2 model can't, causing different number of observations and incomparable models). It is suggested to not use this argument unless you want to compare models, and always run \code{mlVAR} without using this argument afterwards in the selected model.
 }
