@@ -246,7 +246,7 @@ plot.mlVAR <-
           # Via P:
           
           if (any(is.na(x$results$Beta$P))){
-            
+
             # Via CI:
             if (!any(is.na(x$results$Beta$lower)) && !any(is.na(x$results$Beta$upper))){
               SIG <- t(x$results$Beta$lower[,,lag]) > 0 |  t(x$results$Beta$upper[,,lag]) < 0
@@ -436,7 +436,7 @@ plot.mlVAR <-
     }
     
     qgraph::qgraph(NET[ord,ord],lty = lty,labels = x$input$vars[ord],layout=layout,
-                   ...)
+                   ..., directed = type == "temporal")
   }
 
 
