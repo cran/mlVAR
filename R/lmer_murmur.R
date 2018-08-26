@@ -144,7 +144,6 @@ lmer_mlVAR <-
     }
     
     
-  
     ### Collect the results:
     Results <- list()
     
@@ -200,25 +199,44 @@ lmer_mlVAR <-
     
     
     # Inverse estimate:
-    D <- diag(1/mu_SD^2)
-    inv <- D %*% (diag(length(Outcomes)) - Gamma_Omega_mu)
-    # Average:
-    inv <- (inv + t(inv))/2
-    # Force positive/definite:
-    inv <- forcePositive(inv) # - diag(nrow(inv)) * min(min(eigen(inv)$values),0)
-    
-    # invert:
-    mu_cov <- corpcor::pseudoinverse(inv)
-    mu_prec <- inv
+    if (any(mu_SD ==0)){
+      warning("Zero SD found in mean of following variables: ",paste(names(mu_SD[which(mu_SD==0)]), collapse = ", ")," - Between-subject effects could not be estimated")
+      
+      mu_cov <- mu_prec <- inv <- matrix(NA, length(Outcomes), length(Outcomes))
+      
+      colnames(mu_cov) <- rownames(mu_cov) <- Outcomes
+      
+      ### Store results:
+      Results[["Omega_mu"]] <- modelCov(
+        cor = modelArray(mean=mu_cov),
+        cov = modelArray(mean=mu_cov),
+        prec = modelArray(mean=mu_prec)
+      )
+      
+    } else {
+      D <- diag(1/mu_SD^2)
+      inv <- D %*% (diag(length(Outcomes)) - Gamma_Omega_mu)
+      # Average:
+      inv <- (inv + t(inv))/2
+      # Force positive/definite:
+      inv <- forcePositive(inv) # - diag(nrow(inv)) * min(min(eigen(inv)$values),0)
+      
+      # invert:
+      mu_cov <- corpcor::pseudoinverse(inv)
+      mu_prec <- inv      
+      
+      colnames(mu_cov) <- rownames(mu_cov) <- Outcomes
+      
+      ### Store results:
+      Results[["Omega_mu"]] <- modelCov(
+        cor = modelArray(mean=cov2cor(mu_cov)),
+        cov = modelArray(mean=mu_cov),
+        prec = modelArray(mean=mu_prec)
+      )
+    }
+
     # }
-    colnames(mu_cov) <- rownames(mu_cov) <- Outcomes
     
-    ### Store results:
-    Results[["Omega_mu"]] <- modelCov(
-      cor = modelArray(mean=cov2cor(mu_cov)),
-      cov = modelArray(mean=mu_cov),
-      prec = modelArray(mean=mu_prec)
-    )
     
     if (!all(lags==0)){
       
@@ -398,7 +416,7 @@ lmer_mlVAR <-
       if (contemporaneous == "unique"){
         # Compute observed residuals covariances:
         Theta_posthoc <- lapply(unique(augData[[idvar]]),function(id){
-          cov(resid[augData[[idvar]] == id,],use = "pairwise.complete.obs")
+          cov(resid[augData[[idvar]] == id,Outcomes],use = "pairwise.complete.obs")
         })
         
         # abind all and compute means:
@@ -550,8 +568,19 @@ lmer_mlVAR <-
           res
         }))
         
+        
+        # Posthoc thetas for abnormal variances:
+        Theta_posthoc <- lapply(unique(augData[[idvar]]),function(id){
+          cov(resid[augData[[idvar]] == id,Outcomes],use = "pairwise.complete.obs")
+        })
+        
+        
         Theta_subject_prec[[p]] <- forcePositive(D %*% (diag(length(Outcomes)) - Gamma_Theta_subject[[p]]))
         Theta_subject_cov[[p]] <- forcePositive(corpcor::pseudoinverse(Theta_subject_prec[[p]]))
+        if (sum(diag(Theta_subject_cov[[p]])) > 10*sum(diag(Theta_fixed_cov))){
+          # if cov is too big, replace with sample cov:
+          Theta_subject_cov[[p]]  <- Theta_posthoc[[p]]
+        }
         Theta_subject_cor[[p]] <- forcePositive(cov2cor(forcePositive(Theta_subject_cov[[p]])))
       }
       

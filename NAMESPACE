@@ -1,4 +1,5 @@
 # importFrom(rstan, "stan")
+export(mlVARsample)
 importFrom(clusterGeneration,"genPositiveDefMat")
 export(mlVARsim)
 export(mlVARsim0)
@@ -52,6 +53,7 @@ importFrom("stats", "coef", "lm", "resid")
   
   
 import(parallel)
+import(graphicalVAR)
 
 importFrom("utils", "capture.output", "combn", "read.table",
              "write.table")
@@ -59,3 +61,4 @@ importFrom("utils", "capture.output", "combn", "read.table",
 importFrom("stats", "sigma")
 
 export(importMplus)
+ importFrom("stats", "cor", "median")
