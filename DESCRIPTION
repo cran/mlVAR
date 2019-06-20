@@ -1,7 +1,7 @@
 Package: mlVAR
 Type: Package
 Title: Multi-Level Vector Autoregression
-Version: 0.4.2
+Version: 0.4.3
 Depends: R (>= 3.3.0)
 Imports: lme4, arm, qgraph, dplyr, clusterGeneration, mvtnorm, corpcor,
         plyr, abind, methods, parallel, MplusAutomation, graphicalVAR
@@ -12,6 +12,6 @@ Description: Estimates the multi-level vector autoregression model on time-serie
              networks and between-subjects networks.
 License: GPL-2
 NeedsCompilation: no
-Packaged: 2019-01-24 13:34:41 UTC; sachaepskamp
+Packaged: 2019-06-20 16:39:35 UTC; sachaepskamp
 Repository: CRAN
-Date/Publication: 2019-01-24 14:00:03 UTC
+Date/Publication: 2019-06-20 17:00:03 UTC

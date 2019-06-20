@@ -25,6 +25,8 @@ lmer_mlVAR <-
   function(model,augData,idvar,contemporaneous = "orthogonal", verbose=TRUE,temporal="orthogonal",
            nCores = 1, AR = FALSE, ...){
     
+    # Just to be sure:
+    lmerResults <- lmerResults2 <- NULL
     
     
     Outcomes <- unique(model$dep)
@@ -86,7 +88,7 @@ lmer_mlVAR <-
         formula <- as.formula(mod)
         
         # Run lmer:
-        return(suppressWarnings(lmer(formula, data = augData,REML=FALSE, ...)))
+        return(suppressMessages(suppressWarnings(lmer(formula, data = augData,REML=FALSE, ...))))
       })
 
       
@@ -132,7 +134,7 @@ lmer_mlVAR <-
         formula <- as.formula(mod)
         
         # Run lmer:
-        lmerResults[[i]] <- suppressWarnings(lmer(formula, data = augData,REML=FALSE, ...))
+        suppressMessages(suppressWarnings(lmerResults[[i]] <- suppressWarnings(lmer(formula, data = augData,REML=FALSE, ...))))
         
         if (verbose){
           setTxtProgressBar(pb, i)
@@ -142,7 +144,7 @@ lmer_mlVAR <-
         close(pb)
       }
     }
-    
+
     
     ### Collect the results:
     Results <- list()
@@ -439,6 +441,7 @@ lmer_mlVAR <-
         
         Results[["Theta"]] <- modelCov(cov = modelArray(mean = Theta_fixed, subject = Theta_posthoc))
       }
+      lmerResults2 <- Results[["Theta"]]
       
     } else {
       ### TWO STEP METHOD ###
@@ -474,7 +477,7 @@ lmer_mlVAR <-
           formula <- as.formula(mod)
           
           # Run lmer:
-          return(suppressWarnings(lmer(formula, data = resid,REML=FALSE, ...)))
+          return(suppressMessages(suppressWarnings(lmer(formula, data = resid,REML=FALSE, ...))))
         })
         
         # Stop the cluster:
@@ -503,7 +506,7 @@ lmer_mlVAR <-
           formula <- as.formula(mod)
           
           # Run lmer:
-          lmerResults2[[i]] <- suppressWarnings(lmer(formula, data = resid,REML=FALSE, ...))
+          lmerResults2[[i]] <- suppressMessages(suppressWarnings(lmer(formula, data = resid,REML=FALSE, ...)))
           
           if (verbose){
             setTxtProgressBar(pb, i)
@@ -515,8 +518,7 @@ lmer_mlVAR <-
       }
       
       
-      
-      
+   
       
       ### Gamma_Theta is the least squares regression matrix:
       Gamma_Theta_fixed <- matrix(0, nVar, nVar)
@@ -558,13 +560,24 @@ lmer_mlVAR <-
       colnames(Theta_fixed_cov) <- rownames(Theta_fixed_cov) <- 
         colnames(Theta_fixed_prec) <- rownames(Theta_fixed_prec)  <- Outcomes
       
-      # Compute random effects:
-      Gamma_Theta_subject <- Theta_subject_prec <- Theta_subject_cov <- Theta_subject_cor <- list()
+
+  # List of all random effects:
+      ranefs <- lapply(lmerResults2, ranef)
+      nRandom <- nrow(ranef(lmerResults2[[1]])[[idvar]])
       
-      for (p in 1:nrow(ranef(lmerResults2[[1]])[[idvar]])){
+      if (verbose){
+        message("Computing random effects")
+        pb <- txtProgressBar(min = 0, max = nRandom, style = 3)
+      }
+      
+      # Compute random effects:
+      Gamma_Theta_subject <- Theta_subject_prec <- Theta_subject_cov <- Theta_subject_cor <-  vector("list",nRandom)
+      
+      
+      for (p in 1:nRandom){
         Gamma_Theta_subject[[p]] <- Gamma_Theta_fixed +  do.call(rbind,lapply(seq_along(lmerResults2),function(i){
           res <- rep(0,nVar)
-          res[-i] <- unlist(ranef(lmerResults2[[i]])[[idvar]][p,])
+          res[-i] <- unlist(ranefs[[i]][[idvar]][p,])
           res
         }))
         
@@ -582,8 +595,16 @@ lmer_mlVAR <-
           Theta_subject_cov[[p]]  <- Theta_posthoc[[p]]
         }
         Theta_subject_cor[[p]] <- forcePositive(cov2cor(forcePositive(Theta_subject_cov[[p]])))
+        
+        if (verbose){
+          setTxtProgressBar(pb, p)
+        }
       }
       
+      if (verbose){
+        close(pb)
+      }
+
       ### Store results:
       Results[["Theta"]] <- modelCov(
         cor = modelArray(mean=cov2cor(Theta_fixed_cov),subject = Theta_subject_cor),
@@ -597,9 +618,10 @@ lmer_mlVAR <-
         SE = Gamma_Theta_SE,
         P = Gamma_Theta_P
       )
+      
     }
     
-    
+
     
     # Goodness of fit
     names(lmerResults) <- Outcomes
