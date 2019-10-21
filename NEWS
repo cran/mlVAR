@@ -1,3 +1,6 @@
+Changes in version 0.4.4
+  o bind_rows change to be compatible with new dplyr release
+
 Changes in version 0.4.3
   o mlVAR now issues a warning when < 20 observations per subject are used
   o Fixed a bug with 'lmerResults2'
