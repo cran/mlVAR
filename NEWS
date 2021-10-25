@@ -1,5 +1,12 @@
-Changes in version 0.4.4
-  o bind_rows change to be compatible with new dplyr release
+Changes in Version 0.5
+  - The 'mlVARsample' function has been added to mlVAR
+  - Added Myrthe Veenman to contributor list
+  - Fixed a bug where contemporaneous standard deviations were reported as variances instead of standard deviations
+  - Fixed a bug with the beepvar argument
+  - Replaced deprecated dplyr functions
+  - Added a warning for when a beep is used multiple times
+  - The 'nonsig' argument in the plot method now defaults to 'show' when SD=TRUE
+  - Fixed a bug in the summary method when fixed effects estimation was used
 
 Changes in version 0.4.3
   o mlVAR now issues a warning when < 20 observations per subject are used

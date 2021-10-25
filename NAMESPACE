@@ -1,5 +1,11 @@
 # importFrom(rstan, "stan")
 export(mlVARsample)
+
+importFrom(rlang,.data)
+
+export(mlVARsample)
+S3method(summary, mlVARsample)
+
 importFrom(clusterGeneration,"genPositiveDefMat")
 export(mlVARsim)
 export(mlVARsim0)
