@@ -1,13 +1,13 @@
-e8900b9a781a2ee7d91edf8b9c2a11c4 *DESCRIPTION
-707b8a576e4e939a2f657cf2fe6031bc *NAMESPACE
-4c7d95e9c5eb86696be5e9e57496deb8 *NEWS
+6137e8fd5548330d6605838fd1bd7a5c *DESCRIPTION
+ff14214f547469f354ec12fe20705bca *NAMESPACE
+51209147876e2ba35898e67533276fdb *NEWS
 78a054c71270e609ece170e25fde0e3b *R/Bayes_mlVAR.R
 cccc9e6cffd01745caa13f4eef5470d7 *R/JAGSmodels.R
 be935b160d68d3cd6165f87b9ec2e5b9 *R/Mplus.R
 dd5b31b9662a868da34d3fc1b597c144 *R/MplusTemplate.R
 99620b2838a16127de2040d0b588f31f *R/NodeWise.R
 134acd1c12967d5d333fff52fee761b7 *R/S3Methods.R
-071c64bceedae3d3adcce1a1eb5d5738 *R/S3Methods0.R
+8acc2d7f4506f08d2693ee81e2df1fa1 *R/S3Methods0.R
 701383a6696ee4b8cdfea9b1de9a041a *R/cond_mvnorm.R
 ac327270ca46cc17445d686175e9578e *R/effects.R
 49e398e527b296f767f5826cf3dff7b7 *R/importMplus.R
@@ -17,7 +17,7 @@ ec9069fb40376cabeed3a671aab5ea18 *R/leastSquares_mlVAR.R
 d60bc9d72eb68d98a356e02212eaa903 *R/mlVAR.R
 53ed623b5745d393b3162de2df85aa6c *R/mlVAR0.R
 527a529315cf8e915cc557afb35d9633 *R/mlVARcompare.R
-c81a965e354426e32ad8c187769e740a *R/mlVARmodel.R
+56c611efec013e78908143b5bd304aa6 *R/mlVARmodel.R
 1995bdded2db85a7938112efe5c88ce8 *R/mlVARsamplesize.R
 f8249a0fec855646e1b3f5e25580daed *R/modelMatrix.R
 5acca6f89068cfab3363bfb25bb50513 *R/movingWindow.R
@@ -34,9 +34,8 @@ cd9347d01cc680351cdd9465b9ff7e6f *man/mlVAR0.Rd
 e0d18eaa27cb620d08cc5bd8e10491dc *man/mlVARcompare.Rd
 a36d35b4d676e22da8adc98a0d673b01 *man/mlVARsample.Rd
 0ad521317bc0c9f56529aca1d9aa1435 *man/mlVARsim.Rd
-b86d632f9664d2a43968220898617943 *man/mlVARsim0.Rd
 a1418ce81150f3cf8c8fae03f077be65 *man/plot.mlVAR.Rd
-340c2f3fc18ee5ed3aa071495e44d17a *man/plotMethod0.Rd
+2b832e9262f1bf875bd6f2a75b56a6c8 *man/plotMethod0.Rd
 5c6d024800444943c0bac664b88484b9 *man/printsummary0.Rd
 1e4d8888975047165b12268b31675f4a *man/simulateVAR.Rd
 a4c20c98fe19ca205c1e3dd983d3f782 *man/summary.mlVAR.Rd
