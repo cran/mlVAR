@@ -73,7 +73,11 @@ mlVAR <- function(
   chains = nCores,
   signs,
   
-  orthogonal # Used for backward competability
+  orthogonal, # Used for backward competability
+  
+  trueMeans, # Optional data frame with true personwise means to plug in
+  
+  na.rm = TRUE
   
   # nCores = 1,
   # JAGSexport = FALSE, # Exports jags files
@@ -83,8 +87,8 @@ mlVAR <- function(
   # ...
 )
 {
-  if (0 %in% lags & length(lags) > 1){
-    stop("0 in 'lags' ignored; contemporaneous relationships are estimated by default.")
+  if (0 %in% lags && length(lags) > 1){
+    warning("0 in 'lags' ignored; contemporaneous relationships are estimated by default.")
     lags <- lags[lags!=0]
   }
   # First check the estimation options:
@@ -293,7 +297,12 @@ mlVAR <- function(
   
   ### STANDARDIZE DATA ###
   # Test for rank-deficient:
-  X <- as.matrix(na.omit(data[,vars]))
+  if (na.rm){
+    X <- as.matrix(na.omit(data[,vars]))
+  } else {
+    X <- as.matrix(data[,vars])
+  }
+  
   qrX <- qr(X)
   rnk <- qrX$rank
   
@@ -321,6 +330,15 @@ mlVAR <- function(
     
   }
   
+  # If trueMeans is supplied, within-person center and re-add true means:
+  if (!missing(trueMeans)){
+    for (v in vars){
+        data[[v]] <-  ave(data[[v]],data[[idvar]], FUN = function(xx)aveCenter(xx)) + trueMeans[[v]][match(data[[idvar]], trueMeans[[idvar]])]
+    }
+  }
+
+    
+  # Standardize across all variables:
   if (scale){
     for (v in vars){
       data[[v]] <- Scale(data[[v]])
@@ -341,7 +359,7 @@ mlVAR <- function(
   
   
   # Between-subjects model:
-  if (betweenSubjects == "GGM" & estimator == "lmer"){
+  if (betweenSubjects == "GGM" && estimator == "lmer"){
     between <- expand.grid(dep=vars,pred=vars,lag=NA,type="between",
                            stringsAsFactors = FALSE)
     
@@ -393,12 +411,31 @@ mlVAR <- function(
   names(allBeeps) <- c(idvar,dayvar,beepvar)
   
   # Left join the beeps per day:
-  
    allBeeps <- allBeeps %>% dplyr::left_join(beepsPerDay, by = c(idvar,dayvar)) %>% 
       dplyr::group_by(.data[[idvar]],.data[[dayvar]]) %>% dplyr::filter(.data[[beepvar]] >= .data$first, .data[[beepvar]] <= .data$last)%>%
       dplyr::arrange(.data[[idvar]],.data[[dayvar]],.data[[beepvar]])
   
   
+   ### Check true means structure:
+   if (!missing(trueMeans)){
+     # Check if ID variables is in the trueMeans object:
+     if (!idvar %in% names(trueMeans)){
+       stop("ID variable not found in 'trueMeans' object.")
+     }
+     
+     # check if all variables are in trueMeans object:
+     if (!all(vars %in% names(trueMeans))){
+       stop("Not all variables in 'vars' are found in 'trueMeans' object.")
+     }
+     
+     # Check if all IDs are in trueMeans object:
+     if (!all(unique(data[[idvar]]) %in% unique(trueMeans[[idvar]]))){
+       stop("Not all IDs in data are found in 'trueMeans' object.")
+     }
+   }
+   
+    # FIXME: Need to center dependent variable and add true means!
+   
   
   ## Enter NA's:
   #augData <- augData %>% right_join(allBeeps, by = c(idvar,dayvar,beepvar)) %>%
@@ -415,7 +452,12 @@ mlVAR <- function(
       
       if (UniquePredModel$type[i] == "between"){
         if (estimator == "lmer"){
-          augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$pred[i]]],augData[[idvar]], FUN = aveMean)          
+          if (missing(trueMeans)){
+            augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$pred[i]]],augData[[idvar]], FUN = aveMean)            
+          } else {
+            augData[[UniquePredModel$predID[i]]] <- trueMeans[[UniquePredModel$pred[i]]][match(augData[[idvar]],trueMeans[[idvar]])]
+          }
+          
         }
       } else {
         # First include:
@@ -424,7 +466,17 @@ mlVAR <- function(
         # Then center:
         ### CENTERING ONLY NEEDED WHEN ESTIMATOR != JAGS ###
         if (!estimator %in% c("JAGS")){
-          augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], FUN = function(xx)aveCenter(xx,scale=scaleWithin))
+          if (missing(trueMeans)){
+            augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], FUN = function(xx)aveCenter(xx,scale=scaleWithin))
+          } else {
+            augData[[UniquePredModel$predID[i]]] <- augData[[UniquePredModel$predID[i]]] - trueMeans[[UniquePredModel$pred[i]]][match(augData[[idvar]],trueMeans[[idvar]])]
+            if (scaleWithin){
+              augData[[UniquePredModel$predID[i]]] <- ave(augData[[UniquePredModel$predID[i]]],augData[[idvar]], aveScaleNoCenter)
+            } 
+              
+              
+          }
+          
         } 
       }
       
@@ -441,7 +493,12 @@ mlVAR <- function(
   # Remove missings from augData:
   if (!estimator %in% c("JAGS","Mplus")){
     Vars <- unique(c(PredModel$dep,PredModel$predID,idvar,beepvar,dayvar))
-    augData <- na.omit(augData[,Vars])
+    if (na.rm){
+      augData <- na.omit(augData[,Vars])
+    } else {
+      augData <- augData[,Vars]
+    }
+    
     PredModel <- PredModel[is.na(PredModel$lag) | (PredModel$lag %in% lags),]
   } # JAGS and Mplus handle missings!
   

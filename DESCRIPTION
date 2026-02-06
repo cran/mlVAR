@@ -1,11 +1,11 @@
 Package: mlVAR
 Type: Package
 Title: Multi-Level Vector Autoregression
-Version: 0.5.2
+Version: 0.5.5
 Depends: R (>= 3.3.0)
-Imports: lme4, arm, qgraph, dplyr (>= 0.5.0), clusterGeneration,
-        mvtnorm, corpcor, plyr, abind, methods, parallel,
-        MplusAutomation, graphicalVAR, rlang
+Imports: lme4, arm, qgraph, dplyr (>= 1.0.0), clusterGeneration,
+        mvtnorm, corpcor, abind, methods, parallel, MplusAutomation,
+        graphicalVAR, rlang
 Authors@R: c(
   person("Sacha", "Epskamp", email = "mail@sachaepskamp.com",role = c("aut", "cre")),
   person("Marie K.", "Deserno", role = c("aut")),
@@ -16,11 +16,13 @@ Description: Estimates the multi-level vector autoregression model on time-serie
              Three network structures are obtained: temporal networks, contemporaneous
              networks and between-subjects networks.
 License: GPL-2
+BugReports: https://github.com/SachaEpskamp/mlVAR/issues
+RoxygenNote: 7.3.3
 NeedsCompilation: no
-Packaged: 2024-02-01 06:40:50 UTC; sachaepskamp
+Packaged: 2026-02-06 05:35:19 UTC; sachaepskamp
 Author: Sacha Epskamp [aut, cre],
   Marie K. Deserno [aut],
   Laura F. Bringmann [aut],
   Myrthe Veenman [ctb]
 Repository: CRAN
-Date/Publication: 2024-02-01 07:10:21 UTC
+Date/Publication: 2026-02-06 06:40:22 UTC
