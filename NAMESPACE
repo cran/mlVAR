@@ -9,11 +9,19 @@ export(mlVARsim)
 # export(mlVARsim0)
 export(simulateVAR)
 export(mlVAR)
+export(mlGGM)
 export(fixedEffects)
 export(randomEffects)
 S3method(plot, mlVAR)
 S3method(print, mlVAR)
 S3method(summary, mlVAR)
+S3method(predict, mlVAR)
+S3method(residuals, mlVAR)
+export(resimulate)
+S3method(resimulate, mlVAR)
+S3method(plot, mlGGM)
+S3method(print, mlGGM)
+S3method(summary, mlGGM)
 S3method(print, mlVARcompare)
 # S3method(plot, mlVARsim0)
 S3method(plot, mlVARsim)
@@ -43,13 +51,13 @@ S3method(plot, mlVAR0)
 S3method(print, mlVAR0)
 S3method(summary, mlVAR0)
 
-importFrom("stats", "coef", "lm", "resid")
+importFrom("stats", "coef", "fitted", "lm", "predict", "resid")
 
   importFrom("graphics", "plot")
   importFrom("methods", "is")
-  importFrom("stats", "AIC", "BIC", "as.formula", "ave", "cov",
-             "cov2cor", "na.omit", "pnorm", "quantile", "rWishart",
-             "residuals", "rnorm", "runif", "sd")
+  importFrom("stats", "AIC", "BIC", "as.formula", "ave", "complete.cases",
+             "cov", "cov2cor", "na.omit", "pnorm", "quantile", "rWishart",
+             "residuals", "rnorm", "runif", "sd", "setNames")
   importFrom("utils", "head", "setTxtProgressBar", "txtProgressBar")
   
   

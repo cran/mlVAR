@@ -143,6 +143,777 @@ summary.mlVAR <- function(
 }
 
 
+## Internal helper: augment data for prediction (mirrors the augmentation pipeline in mlVAR.R)
+.augment_mlVAR_data <- function(data, model, idvar, dayvar, beepvar, scaleWithin, vars, estimator) {
+  augData <- data
+
+  # Fill missing beeps:
+  beepsPerDay <- dplyr::summarize(
+    augData %>% dplyr::group_by(.data[[idvar]], .data[[dayvar]]),
+    first = min(.data[[beepvar]], na.rm = TRUE),
+    last = max(.data[[beepvar]], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+  allBeeps <- expand.grid(
+    unique(data[[idvar]]),
+    unique(data[[dayvar]]),
+    seq(min(data[[beepvar]], na.rm = TRUE), max(data[[beepvar]], na.rm = TRUE)),
+    stringsAsFactors = FALSE
+  )
+  names(allBeeps) <- c(idvar, dayvar, beepvar)
+
+  allBeeps <- allBeeps %>%
+    dplyr::left_join(beepsPerDay, by = c(idvar, dayvar)) %>%
+    dplyr::group_by(.data[[idvar]], .data[[dayvar]]) %>%
+    dplyr::filter(.data[[beepvar]] >= .data$first, .data[[beepvar]] <= .data$last) %>%
+    dplyr::arrange(.data[[idvar]], .data[[dayvar]], .data[[beepvar]])
+
+  augData <- augData %>%
+    dplyr::right_join(allBeeps, by = c(idvar, dayvar, beepvar)) %>%
+    dplyr::arrange(.data[[idvar]], .data[[dayvar]], .data[[beepvar]])
+
+  # Create predictors from model:
+  UniquePredModel <- model[!duplicated(model[, c("pred", "lag", "type")]), c("pred", "lag", "type", "predID")]
+
+  if (!estimator %in% c("Mplus", "JAGS")) {
+    for (i in seq_len(nrow(UniquePredModel))) {
+      if (UniquePredModel$type[i] == "between") {
+        if (estimator == "lmer") {
+          augData[[UniquePredModel$predID[i]]] <- ave(
+            augData[[UniquePredModel$pred[i]]],
+            augData[[idvar]],
+            FUN = aveMean
+          )
+        }
+      } else {
+        # Lag:
+        augData[[UniquePredModel$predID[i]]] <- ave(
+          augData[[UniquePredModel$pred[i]]],
+          augData[[idvar]], augData[[dayvar]],
+          FUN = function(x) aveLag(x, UniquePredModel$lag[i])
+        )
+        # Center within person:
+        augData[[UniquePredModel$predID[i]]] <- ave(
+          augData[[UniquePredModel$predID[i]]],
+          augData[[idvar]],
+          FUN = function(xx) aveCenter(xx, scale = scaleWithin)
+        )
+      }
+    }
+  }
+
+  # Within-person standardize dependent vars if scaleWithin = TRUE:
+  if (isTRUE(scaleWithin)) {
+    for (v in vars) {
+      augData[[v]] <- ave(augData[[v]], augData[[idvar]], FUN = function(xx) aveScaleNoCenter(xx))
+    }
+  }
+
+  # Remove NAs:
+  Vars <- unique(c(model$dep, model$predID, idvar, beepvar, dayvar))
+  augData <- na.omit(augData[, Vars])
+
+  return(augData)
+}
+
+
+## Internal helper: predict on newdata
+.predict_mlVAR_newdata <- function(object, newdata, scale_back = TRUE) {
+
+  vars <- object$input$vars
+  idvar <- object$input$idvar
+  dayvar <- object$input$dayvar
+  beepvar <- object$input$beepvar
+  estimator <- object$input$estimator
+
+  # Auto-create DAY and BEEP if they were auto-generated during fitting:
+  if (!dayvar %in% names(newdata)) {
+    newdata[[dayvar]] <- 1
+  }
+  if (!beepvar %in% names(newdata)) {
+    newdata[[beepvar]] <- ave(seq_len(nrow(newdata)), newdata[[idvar]], newdata[[dayvar]], FUN = seq_along)
+  }
+
+  # Validate newdata columns:
+  required_cols <- c(idvar, dayvar, beepvar, vars)
+  missing_cols <- required_cols[!required_cols %in% names(newdata)]
+  if (length(missing_cols) > 0) {
+    stop(paste0("The following columns are missing from newdata: ", paste(missing_cols, collapse = ", ")))
+  }
+
+  # Store original newdata for output:
+  origNewdata <- newdata[, required_cols, drop = FALSE]
+
+  # Apply full_detrend if model used it:
+  if (isTRUE(object$input$full_detrend)) {
+    obs_idx <- ave(seq_len(nrow(newdata)), newdata[[idvar]], FUN = seq_along)
+    obs_per_cluster <- table(newdata[[idvar]])
+    if (length(unique(obs_per_cluster)) != 1) {
+      warning("'full_detrend' was used in model fitting but newdata has unequal observations per cluster. Detrending not applied to newdata.")
+    } else {
+      for (v in vars) {
+        newdata[[v]] <- ave(newdata[[v]], obs_idx, FUN = Scale)
+      }
+    }
+  }
+
+  # Apply grand-mean scaling (using training set parameters):
+  if (isTRUE(object$input$scaled)) {
+    for (v in vars) {
+      newdata[[v]] <- (newdata[[v]] - object$input$scale_means[v]) / object$input$scale_sds[v]
+    }
+  }
+
+  # Augment newdata (fill missing beeps, create lagged predictors, center):
+  augData <- .augment_mlVAR_data(
+    data = newdata,
+    model = object$model,
+    idvar = idvar,
+    dayvar = dayvar,
+    beepvar = beepvar,
+    scaleWithin = isTRUE(object$input$scaleWithin),
+    vars = vars,
+    estimator = estimator
+  )
+
+  # Initialize result matrices aligned to original newdata:
+  nOrig <- nrow(origNewdata)
+  predicted_df <- as.data.frame(matrix(NA_real_, nrow = nOrig, ncol = length(vars)))
+  colnames(predicted_df) <- vars
+  residuals_df <- as.data.frame(matrix(NA_real_, nrow = nOrig, ncol = length(vars)))
+  colnames(residuals_df) <- vars
+
+  # Match augData rows back to original newdata:
+  aug_key <- paste(augData[[idvar]], augData[[dayvar]], augData[[beepvar]], sep = "_")
+  orig_key <- paste(origNewdata[[idvar]], origNewdata[[dayvar]], origNewdata[[beepvar]], sep = "_")
+  idx <- match(orig_key, aug_key)
+  matched <- !is.na(idx)
+
+  if (estimator == "lmer") {
+    lmerResults <- object$output$temporal
+
+    for (i in seq_along(vars)) {
+      pred_vals <- predict(lmerResults[[i]], newdata = augData, allow.new.levels = TRUE)
+      obs_vals <- augData[[vars[i]]]
+      resid_vals <- obs_vals - pred_vals
+
+      predicted_df[matched, vars[i]] <- pred_vals[idx[matched]]
+      residuals_df[matched, vars[i]] <- resid_vals[idx[matched]]
+    }
+
+  } else if (estimator == "lm") {
+    # lm: can only predict for subjects seen during training
+    train_IDs <- unique(object$data[[idvar]])
+    new_IDs <- unique(origNewdata[[idvar]])
+    unknown_IDs <- new_IDs[!new_IDs %in% train_IDs]
+    if (length(unknown_IDs) > 0) {
+      warning(paste0("The following subject IDs in newdata were not in the training data ",
+                     "and cannot be predicted with estimator = 'lm': ",
+                     paste(unknown_IDs, collapse = ", ")))
+    }
+
+    for (i in seq_along(vars)) {
+      pred_all <- rep(NA_real_, nrow(augData))
+
+      for (p in seq_along(train_IDs)) {
+        id <- train_IDs[p]
+        sub_rows <- which(augData[[idvar]] == id)
+        if (length(sub_rows) == 0) next
+
+        sub <- augData[sub_rows, , drop = FALSE]
+        lm_obj <- object$output[[i]][[p]]
+        pred_vals <- predict(lm_obj, newdata = sub)
+        pred_all[sub_rows] <- as.numeric(pred_vals)
+      }
+
+      obs_vals <- augData[[vars[i]]]
+      resid_vals <- obs_vals - pred_all
+
+      predicted_df[matched, vars[i]] <- pred_all[idx[matched]]
+      residuals_df[matched, vars[i]] <- resid_vals[idx[matched]]
+    }
+
+  } else {
+    stop(paste0("predict.mlVAR with newdata not implemented for estimator = '", estimator, "'"))
+  }
+
+  # Scale back to original metric if requested:
+  if (scale_back && isTRUE(object$input$scaled)) {
+    for (v in vars) {
+      predicted_df[[v]] <- predicted_df[[v]] * object$input$scale_sds[v] + object$input$scale_means[v]
+      residuals_df[[v]] <- residuals_df[[v]] * object$input$scale_sds[v]
+    }
+  }
+
+  list(
+    predicted = predicted_df,
+    residuals = residuals_df,
+    ids = origNewdata[, c(idvar, dayvar, beepvar), drop = FALSE]
+  )
+}
+
+
+## Internal workhorse: computes both predictions and residuals on training data
+.predict_mlVAR_train <- function(object, scale_back = TRUE) {
+
+  vars <- object$input$vars
+  idvar <- object$input$idvar
+  dayvar <- object$input$dayvar
+  beepvar <- object$input$beepvar
+  estimator <- object$input$estimator
+
+  origData <- object$input$originalData
+  augData <- object$data
+
+  nOrig <- nrow(origData)
+  predicted_df <- as.data.frame(matrix(NA_real_, nrow = nOrig, ncol = length(vars)))
+  colnames(predicted_df) <- vars
+  residuals_df <- as.data.frame(matrix(NA_real_, nrow = nOrig, ncol = length(vars)))
+  colnames(residuals_df) <- vars
+
+  # Match augData rows to originalData via composite key:
+  aug_key <- paste(augData[[idvar]], augData[[dayvar]], augData[[beepvar]], sep = "_")
+  orig_key <- paste(origData[[idvar]], origData[[dayvar]], origData[[beepvar]], sep = "_")
+  idx <- match(orig_key, aug_key)
+  matched <- !is.na(idx)
+
+  if (estimator == "lmer") {
+    lmerResults <- object$output$temporal
+
+    for (i in seq_along(vars)) {
+      fit_vals <- fitted(lmerResults[[i]])
+      resid_vals <- residuals(lmerResults[[i]])
+
+      # Align to augData rows (names = rownames of data used in lmer):
+      aug_fit <- rep(NA_real_, nrow(augData))
+      aug_res <- rep(NA_real_, nrow(augData))
+      aug_positions <- match(names(fit_vals), rownames(augData))
+      aug_fit[aug_positions] <- as.numeric(fit_vals)
+      aug_res[aug_positions] <- as.numeric(resid_vals)
+
+      predicted_df[matched, vars[i]] <- aug_fit[idx[matched]]
+      residuals_df[matched, vars[i]] <- aug_res[idx[matched]]
+    }
+
+  } else if (estimator == "lm") {
+    IDs <- unique(augData[[idvar]])
+
+    for (i in seq_along(vars)) {
+      aug_fit <- rep(NA_real_, nrow(augData))
+      aug_res <- rep(NA_real_, nrow(augData))
+
+      for (p in seq_along(IDs)) {
+        lm_obj <- object$output[[i]][[p]]
+        fit_vals <- fitted(lm_obj)
+        resid_vals <- stats::residuals(lm_obj)
+
+        # Names = rownames from augData subset for this subject:
+        aug_positions <- match(names(fit_vals), rownames(augData))
+        aug_fit[aug_positions] <- as.numeric(fit_vals)
+        aug_res[aug_positions] <- as.numeric(resid_vals)
+      }
+
+      predicted_df[matched, vars[i]] <- aug_fit[idx[matched]]
+      residuals_df[matched, vars[i]] <- aug_res[idx[matched]]
+    }
+
+  } else {
+    stop(paste0("predict/residuals not implemented for estimator = '", estimator, "'"))
+  }
+
+  # Scale back to original metric if requested:
+  if (scale_back && isTRUE(object$input$scaled)) {
+    for (v in vars) {
+      predicted_df[[v]] <- predicted_df[[v]] * object$input$scale_sds[v] + object$input$scale_means[v]
+      residuals_df[[v]] <- residuals_df[[v]] * object$input$scale_sds[v]
+    }
+  }
+
+  list(predicted = predicted_df, residuals = residuals_df)
+}
+
+
+predict.mlVAR <- function(object, newdata, scale_back = TRUE, include_ids = TRUE, ...) {
+
+  vars <- object$input$vars
+  idvar <- object$input$idvar
+  dayvar <- object$input$dayvar
+  beepvar <- object$input$beepvar
+
+  # Dispatch to newdata handler:
+  if (!missing(newdata)) {
+    res <- .predict_mlVAR_newdata(object, newdata, scale_back = scale_back)
+    result <- res$predicted
+    if (include_ids) {
+      result <- cbind(res$ids, result)
+    }
+    return(result)
+  }
+
+  # Training data:
+  res <- .predict_mlVAR_train(object, scale_back = scale_back)
+  result <- res$predicted
+
+  if (include_ids) {
+    ids <- object$input$originalData[, c(idvar, dayvar, beepvar), drop = FALSE]
+    result <- cbind(ids, result)
+  }
+
+  return(result)
+}
+
+
+residuals.mlVAR <- function(object, scale_back = TRUE, include_ids = TRUE, ...) {
+
+  vars <- object$input$vars
+  idvar <- object$input$idvar
+  dayvar <- object$input$dayvar
+  beepvar <- object$input$beepvar
+
+  res <- .predict_mlVAR_train(object, scale_back = scale_back)
+  result <- res$residuals
+
+  if (include_ids) {
+    ids <- object$input$originalData[, c(idvar, dayvar, beepvar), drop = FALSE]
+    result <- cbind(ids, result)
+  }
+
+  return(result)
+}
+
+
+### resimulate S3 method ###
+
+resimulate <- function(object, ...) UseMethod("resimulate")
+
+## Internal helper: extract B_between matrix from temporal models
+.get_B_between <- function(object) {
+  vars <- object$input$vars
+  nVar <- length(vars)
+  betweenMod <- object$model[object$model$type == "between", ]
+
+  B <- matrix(0, nVar, nVar)
+  rownames(B) <- colnames(B) <- vars
+
+  for (v in seq_along(vars)) {
+    if (object$input$estimator == "lmer") {
+      fe <- lme4::fixef(object$output$temporal[[v]])
+    } else {
+      # lm: average coefficients across subjects
+      fe <- colMeans(do.call(rbind, lapply(object$output[[v]], coef)))
+    }
+    for (j in seq_along(vars)) {
+      pid <- betweenMod$predID[betweenMod$dep == vars[v] & betweenMod$pred == vars[j]]
+      if (length(pid) > 0 && pid %in% names(fe)) {
+        B[v, j] <- fe[pid]
+      }
+    }
+  }
+
+  B
+}
+
+resimulate.mlVAR <- function(object, scale_back = TRUE, include_ids = TRUE,
+                             nTime = NULL, keep_missing = TRUE,
+                             variance = c("model", "empirical"), ...) {
+
+  variance <- match.arg(variance)
+
+  vars <- object$input$vars
+  idvar <- object$input$idvar
+  dayvar <- object$input$dayvar
+  beepvar <- object$input$beepvar
+  lags <- object$input$lags
+  estimator <- object$input$estimator
+  origData <- object$input$originalData
+
+  # Determine IDs (lmer stores them, lm does not):
+  if (!is.null(object$IDs)) {
+    IDs <- object$IDs
+  } else {
+    IDs <- unique(object$data[[idvar]])
+  }
+
+  nVar <- length(vars)
+  custom_nTime <- !is.null(nTime)
+
+  # Compute B_between and stationary mean transform:
+  B_between <- .get_B_between(object)
+  stat_transform <- solve(diag(nVar) - B_between)
+
+  # Pre-compute empirical residual SDs if needed:
+  if (variance == "empirical") {
+    resid_df <- residuals(object, scale_back = FALSE, include_ids = TRUE)
+    emp_sd_list <- vector("list", length(IDs))
+    for (i in seq_along(IDs)) {
+      person_resid <- resid_df[resid_df[[idvar]] == IDs[i], vars, drop = FALSE]
+      person_resid <- person_resid[complete.cases(person_resid), , drop = FALSE]
+      if (nrow(person_resid) > nVar) {
+        emp_sd_list[[i]] <- apply(person_resid, 2, sd)
+      } else {
+        # Too few residuals: fall back to model-based
+        emp_sd_list[[i]] <- NULL
+      }
+    }
+  }
+
+  # Helper to get innovation covariance for person i:
+  .get_sigma <- function(i) {
+    # Get model-based covariance from precision matrix:
+    kappa_i <- object$results$Theta$prec$subject[[i]]
+    sigma_model <- solve(kappa_i)
+
+    if (variance == "empirical" && !is.null(emp_sd_list[[i]])) {
+      # Use model partial correlation structure, scaled by empirical SDs:
+      SD <- diag(emp_sd_list[[i]])
+      return(SD %*% cov2cor(sigma_model) %*% SD)
+    }
+
+    return(sigma_model)
+  }
+
+  if (custom_nTime) {
+    # Custom nTime: output has nIDs * nTime rows, id + vars columns only
+    sim_list <- vector("list", length(IDs))
+
+    for (i in seq_along(IDs)) {
+      alpha_i <- object$results$mu$subject[[i]]
+      beta_i <- object$results$Beta$subject[[i]]
+      mu_i <- as.numeric(stat_transform %*% alpha_i)
+      sigma_i <- .get_sigma(i)
+
+      if (max(lags) == 1) {
+        sim_data <- simulateVAR(
+          pars = beta_i[, , 1], means = mu_i,
+          Nt = nTime, residuals = sigma_i
+        )
+      } else {
+        pars_list <- lapply(seq_along(lags), function(k) beta_i[, , k])
+        sim_data <- simulateVAR(
+          pars = pars_list, means = mu_i, lags = lags,
+          Nt = nTime, residuals = sigma_i
+        )
+      }
+
+      person_df <- as.data.frame(as.matrix(sim_data)[, seq_len(nVar), drop = FALSE])
+      colnames(person_df) <- vars
+      person_df[[idvar]] <- IDs[i]
+      sim_list[[i]] <- person_df
+    }
+
+    sim_df <- do.call(rbind, sim_list)
+
+    # Scale back:
+    if (scale_back && isTRUE(object$input$scaled)) {
+      for (v in vars) {
+        sim_df[[v]] <- sim_df[[v]] * object$input$scale_sds[v] + object$input$scale_means[v]
+      }
+    }
+
+    # Reorder columns: id first, then vars
+    sim_df <- sim_df[, c(idvar, vars), drop = FALSE]
+    rownames(sim_df) <- NULL
+    return(sim_df)
+  }
+
+  # Default: match original data structure
+  nOrig <- nrow(origData)
+  sim_df <- as.data.frame(matrix(NA_real_, nrow = nOrig, ncol = nVar))
+  colnames(sim_df) <- vars
+
+  for (i in seq_along(IDs)) {
+    person_rows <- which(origData[[idvar]] == IDs[i])
+    if (length(person_rows) == 0) next
+
+    person_data <- origData[person_rows, , drop = FALSE]
+
+    # Valid rows: non-NA day and beep:
+    valid <- !is.na(person_data[[dayvar]]) & !is.na(person_data[[beepvar]])
+    n_valid <- sum(valid)
+    if (n_valid < 2) next
+
+    # Extract person-specific parameters:
+    alpha_i <- object$results$mu$subject[[i]]
+    beta_i <- object$results$Beta$subject[[i]]
+
+    # Compute stationary mean: (I - B_between)^{-1} * alpha_i
+    mu_i <- as.numeric(stat_transform %*% alpha_i)
+    sigma_i <- .get_sigma(i)
+
+    # Simulate:
+    if (max(lags) == 1) {
+      sim_data <- simulateVAR(
+        pars = beta_i[, , 1], means = mu_i,
+        Nt = n_valid, residuals = sigma_i
+      )
+    } else {
+      pars_list <- lapply(seq_along(lags), function(k) beta_i[, , k])
+      sim_data <- simulateVAR(
+        pars = pars_list, means = mu_i, lags = lags,
+        Nt = n_valid, residuals = sigma_i
+      )
+    }
+
+    # Place simulated values into valid positions:
+    valid_rows <- person_rows[valid]
+    sim_df[valid_rows, ] <- as.matrix(sim_data)[, seq_len(nVar)]
+
+    # Apply variable-specific missingness from original data:
+    if (keep_missing) {
+      for (v in vars) {
+        na_in_var <- is.na(person_data[[v]])
+        if (any(na_in_var)) {
+          sim_df[person_rows[na_in_var], v] <- NA
+        }
+      }
+    }
+  }
+
+  # Scale back to original metric:
+  if (scale_back && isTRUE(object$input$scaled)) {
+    for (v in vars) {
+      sim_df[[v]] <- sim_df[[v]] * object$input$scale_sds[v] + object$input$scale_means[v]
+    }
+  }
+
+  # Add id/day/beep columns:
+  if (include_ids) {
+    ids <- origData[, c(idvar, dayvar, beepvar), drop = FALSE]
+    sim_df <- cbind(ids, sim_df)
+  }
+
+  return(sim_df)
+}
+
+
+### mlGGM S3 methods ###
+
+print.mlGGM <- function(x, ...) {
+  name <- deparse(substitute(x))[[1]]
+  if (nchar(name) > 10) name <- "object"
+  if (name == "x") name <- "object"
+
+  cat("\nmlGGM estimation completed. Input was:\n",
+      "\t- Variables:", x$input$vars, "\n",
+      "\t- Estimator:", x$input$estimator, "\n",
+      "\t- Random effects:", x$input$randomeffects, "\n")
+
+  cat("\n",
+      paste0("Use summary(", name, ") to inspect fit and parameter estimates"),
+      "\n",
+      paste0("Use plot(", name, ") to plot estimated networks"),
+      "\n",
+      paste0("Use getNet(", name, ", 'within') or getNet(", name, ", 'between') to extract network matrices"),
+      "\n")
+}
+
+
+summary.mlGGM <- function(
+  object,
+  show = c("fit", "within", "between"),
+  round = 3,
+  ...
+) {
+  x <- object
+
+  cat("\nmlGGM estimation completed. Input was:\n",
+      "\t- Variables:", x$input$vars, "\n",
+      "\t- Estimator:", x$input$estimator, "\n",
+      "\t- Random effects:", x$input$randomeffects, "\n")
+
+  nVar <- length(object$input$vars)
+  vars <- object$input$vars
+
+  if ("fit" %in% show) {
+    cat("\nInformation indices:\n")
+    print(object$fit, row.names = FALSE)
+  }
+
+  if ("within" %in% show) {
+    pcor <- object$results$within$pcor$mean
+    cor_mat <- object$results$within$cor$mean
+    P <- object$results$Gamma_within$P
+    UT <- upper.tri(pcor)
+
+    if (is.null(P)) {
+      P <- matrix(NA, nrow(UT), ncol(UT))
+    }
+
+    cat("\n\nWithin-cluster effects:\n")
+    WithinDF <- data.frame(
+      v1 = vars[col(pcor)][UT],
+      v2 = vars[row(pcor)][UT],
+      "P 1->2" = round(P[UT], round),
+      "P 2->1" = round(t(P)[UT], round),
+      pcor = round(pcor[UT], round),
+      cor = round(cor_mat[UT], round)
+    )
+    names(WithinDF) <- c("v1", "v2", "P 1->2", "P 1<-2", "pcor", "cor")
+    print(WithinDF, row.names = FALSE)
+  } else {
+    WithinDF <- NULL
+  }
+
+  if ("between" %in% show) {
+    pcor <- object$results$between$pcor$mean
+    cor_mat <- object$results$between$cor$mean
+    P <- object$results$Gamma_between$P
+    UT <- upper.tri(pcor)
+
+    if (is.null(P)) {
+      P <- matrix(NA, nrow(pcor), ncol(pcor))
+    }
+
+    cat("\n\nBetween-cluster effects:\n")
+    BetDF <- data.frame(
+      v1 = vars[col(pcor)][UT],
+      v2 = vars[row(pcor)][UT],
+      "P 1->2" = round(P[UT], round),
+      "P 2->1" = round(t(P)[UT], round),
+      pcor = round(pcor[UT], round),
+      cor = round(cor_mat[UT], round)
+    )
+    names(BetDF) <- c("v1", "v2", "P 1->2", "P 1<-2", "pcor", "cor")
+    print(BetDF, row.names = FALSE)
+  } else {
+    BetDF <- NULL
+  }
+
+  invisible(list(within = WithinDF, between = BetDF))
+}
+
+
+plot.mlGGM <- function(
+  x,
+  type = c("within", "between"),
+  partial = TRUE,
+  SD = FALSE,
+  subject,
+  order,
+  nonsig = c("default", "show", "hide", "dashed"),
+  rule = c("or", "and"),
+  alpha = 0.05,
+  layout = "spring",
+  verbose = TRUE,
+  ...
+) {
+  rule <- match.arg(rule)
+  type <- match.arg(type)
+  nonsig <- match.arg(nonsig)
+
+  if (nonsig == "default") {
+    if (!partial || !missing(subject)) {
+      nonsig <- "show"
+    } else {
+      nonsig <- "hide"
+    }
+    if (verbose) {
+      message(paste0("'nonsig' argument set to: '", nonsig, "'"))
+    }
+  }
+
+  if (missing(order)) {
+    order <- x$input$vars
+  }
+
+  if (is.character(order)) {
+    ord <- match(order, x$input$vars)
+  } else {
+    ord <- order
+  }
+
+  sub <- ifelse(partial, "pcor", "cor")
+
+  if (type == "within") {
+    if (SD) {
+      NET <- x$results$within[[sub]]$SD
+      SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+    } else if (!missing(subject)) {
+      NET <- x$results$within[[sub]]$subject[[subject]]
+      SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+      if (nonsig != "show") {
+        warning("Can not hide non-significant edges for subject network.")
+      }
+    } else {
+      NET <- x$results$within[[sub]]$mean
+
+      if (nonsig != "show") {
+        if (partial && !is.null(x$results$Gamma_within) && !all(is.nan(x$results$Gamma_within$P))) {
+          diag(x$results$Gamma_within$P) <- 0
+          if (rule == "or") {
+            SIG <- x$results$Gamma_within$P < alpha | t(x$results$Gamma_within$P) < alpha
+          } else {
+            SIG <- x$results$Gamma_within$P < alpha & t(x$results$Gamma_within$P) < alpha
+          }
+        } else if (!any(is.na(x$results$within[[sub]]$P))) {
+          SIG <- x$results$within[[sub]]$P < alpha
+        } else {
+          SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+          if (nonsig != "show") {
+            stop("No p-values or CI computed. Can not hide non-significant edges.")
+          }
+        }
+      } else {
+        SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+      }
+    }
+    NET <- makeSym(NET)
+  }
+
+  if (type == "between") {
+    if (!missing(subject)) {
+      stop("No subject-specific between network possible")
+    }
+    if (SD) {
+      stop("No SD for between-cluster network.")
+    }
+
+    NET <- x$results$between[[sub]]$mean
+
+    if (nonsig != "show") {
+      if (partial && !is.null(x$results$Gamma_between) && !all(is.nan(x$results$Gamma_between$P))) {
+        diag(x$results$Gamma_between$P) <- 0
+        if (rule == "or") {
+          SIG <- x$results$Gamma_between$P < alpha | t(x$results$Gamma_between$P) < alpha
+        } else {
+          SIG <- x$results$Gamma_between$P < alpha & t(x$results$Gamma_between$P) < alpha
+        }
+      } else if (!any(is.na(x$results$between[[sub]]$P))) {
+        SIG <- x$results$between[[sub]]$P < alpha
+      } else {
+        SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+        if (nonsig != "show") {
+          stop("No p-values or CI computed. Can not hide non-significant edges.")
+        }
+      }
+    } else {
+      SIG <- matrix(TRUE, nrow(NET), ncol(NET))
+    }
+
+    NET <- makeSym(NET)
+  }
+
+  ### PLOT NETWORK ###
+  if (nonsig == "dashed") {
+    lty <- ifelse(!SIG, 2, 1)
+  } else {
+    lty <- 1
+  }
+
+  if (nonsig == "hide") {
+    NET <- NET * SIG
+  }
+
+  if (any(is.na(NET[ord, ord][upper.tri(NET[ord, ord])])) || any(is.na(NET[ord, ord][lower.tri(NET[ord, ord])]))) {
+    stop("Network not estimated correctly.")
+  }
+
+  qgraph::qgraph(NET[ord, ord], lty = lty, labels = x$input$vars[ord],
+                  layout = layout, ..., directed = FALSE)
+}
+
+
 makeSym <- function(x) (x + t(x))/2
 
 

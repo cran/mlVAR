@@ -76,8 +76,10 @@ mlVAR <- function(
   orthogonal, # Used for backward competability
   
   trueMeans, # Optional data frame with true personwise means to plug in
-  
-  na.rm = TRUE
+
+  na.rm = TRUE,
+
+  full_detrend = FALSE # Standardize per observation position across clusters
   
   # nCores = 1,
   # JAGSexport = FALSE, # Exports jags files
@@ -290,11 +292,14 @@ mlVAR <- function(
   if (!is.numeric(data[[beepvar]])){
     stop("Beep variable is not numeric")
   }
-  
-  
+
+  # Store original data before any row removal or transformation (for predict/residuals):
+  # Uses all current vars; if vars are later dropped by rank check, predict() selects the kept ones.
+  originalData <- data[, c(idvar, dayvar, beepvar, vars), drop = FALSE]
+
   # Remove NA day or beeps:
   data <- data[!is.na(data[[idvar]]) & !is.na(data[[dayvar]]) & !is.na(data[[beepvar]]), ]
-  
+
   ### STANDARDIZE DATA ###
   # Test for rank-deficient:
   if (na.rm){
@@ -337,7 +342,28 @@ mlVAR <- function(
     }
   }
 
-    
+  # Standardize per observation position across clusters:
+  if (full_detrend) {
+    obs_idx <- ave(seq_len(nrow(data)), data[[idvar]], FUN = seq_along)
+    obs_per_cluster <- table(data[[idvar]])
+    if (length(unique(obs_per_cluster)) != 1) {
+      stop("'full_detrend' requires equal number of observations per cluster.")
+    }
+    for (v in vars) {
+      data[[v]] <- ave(data[[v]], obs_idx, FUN = Scale)
+    }
+  }
+
+  # Store scaling parameters (after detrend, before scale):
+  if (scale) {
+    scale_means <- sapply(data[, vars, drop = FALSE], mean, na.rm = TRUE)
+    scale_sds <- sapply(data[, vars, drop = FALSE], sd, na.rm = TRUE)
+    scale_sds[scale_sds == 0] <- 1
+  } else {
+    scale_means <- setNames(rep(0, length(vars)), vars)
+    scale_sds <- setNames(rep(1, length(vars)), vars)
+  }
+
   # Standardize across all variables:
   if (scale){
     for (v in vars){
@@ -401,9 +427,10 @@ mlVAR <- function(
     )))
   }
   
-   beepsPerDay <-  dplyr::summarize(data %>% group_by(.data[[idvar]],.data[[dayvar]]), 
+   beepsPerDay <-  dplyr::summarize(data %>% group_by(.data[[idvar]],.data[[dayvar]]),
                                                     first = min(.data[[beepvar]],na.rm=TRUE),
-                                                    last = max(.data[[beepvar]],na.rm=TRUE))
+                                                    last = max(.data[[beepvar]],na.rm=TRUE),
+                                                    .groups = "drop")
 
   
   # all beeps:
@@ -542,12 +569,21 @@ mlVAR <- function(
   
   # Add input:
   Res[['input']] <- list(
-    vars = vars, 
+    vars = vars,
     lags = lags,
     compareToLags=compareToLags,
     estimator = estimator,
     temporal = temporal,
-    AR = AR
+    AR = AR,
+    originalData = originalData,
+    scale_means = scale_means,
+    scale_sds = scale_sds,
+    scaled = scale,
+    scaleWithin = scaleWithin,
+    full_detrend = full_detrend,
+    idvar = idvar,
+    dayvar = dayvar,
+    beepvar = beepvar
   )
   
   if (estimator == "lmer"){
